@@ -6,9 +6,12 @@ const { google } = googleapis;
 import googleauth from 'google-auth-library';
 const { GoogleAuth } = googleauth;
 import { v4 as uuidv4 } from 'uuid';
+import push from 'pushover-notifications';
+import fs from 'fs';
 
 const BASEURL      = "https://book.timify.com";
 const KEYFILE      = './auth/fififix-5d6e131f9ee8.json';
+const PUSHAUTH     = JSON.parse(fs.readFileSync("./auth/push.json"));
 const CLIENTSCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 const TASKS_PRENZLBERG = "15RH3oCfM05l86JMdiUqD_i8d_9vMB2ZXAPLOisDYg6o";
@@ -325,7 +328,8 @@ async function placeAthletes(fetcher, event, task) {
   console.log(`${task.sheetName} success`, success)
   console.log(`${task.sheetName} failed`, failed)
 
-  const tryWrite = async (auth, athlete, value) => {
+  const auth     = await getAuth();
+  const tryWrite = async (athlete, value) => {
     try {
       const sheets = google.sheets('v4');
       await sheets.spreadsheets.values.update({
@@ -337,13 +341,18 @@ async function placeAthletes(fetcher, event, task) {
       })
     } catch (error) {}
   }
-  const auth = await getAuth();
   for (const athlete of success) {
-    await tryWrite(auth, athlete, athlete.reservation)
+    await tryWrite(athlete, athlete.reservation)
   }
   for (const athlete of failed) {
-    await tryWrite(auth, athlete, `Fehler ${athlete.fails}`)
+    await tryWrite(athlete, `Fehler ${athlete.fails}`)
   }
+  const pusher  = new push(PUSHAUTH.auth)
+  const goods   = success.map(a => `${a.firstname} ${a.lastname}`).join(",")
+  const bads    = failed.map(a => `${a.firstname} ${a.lastname}`).join(",")
+  const message = `${task.sheetName}: Gebucht wurden ${goods}, Fehler bei ${bads}`
+  console.log(message)
+  pusher.send({ d: PUSHAUTH.group, message })
 }
 
 async function startPolling(fetcher, tasks) {
@@ -386,13 +395,13 @@ async function sleepUntil(hours, minutes) {
 }
 
 async function runPlacementAttempt(sheetId, companyId) {
-  await sleepUntil(18, 20);
+  await sleepUntil(7, 50);
   const tasks   = await pullTasklist(sheetId)
   const fetcher = new Fetcher(companyId);
   await fetcher.setup();
   console.log("Completed Setup")
 
-  await sleepUntil(18, 21);
+  await sleepUntil(7, 59);
   console.log("Starting placement")
   const startTime = new Date();
   while (continueTrying(tasks, startTime)) {
