@@ -8,9 +8,11 @@ const { GoogleAuth } = googleauth;
 import { v4 as uuidv4 } from 'uuid';
 
 const BASEURL      = "https://book.timify.com";
+const KEYFILE      = './auth/fififix-5d6e131f9ee8.json';
 const CLIENTSCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-const CO_PRENZLBERG = "5eb987c908eed811feb259d6"
+const TASKS_PRENZLBERG = "15RH3oCfM05l86JMdiUqD_i8d_9vMB2ZXAPLOisDYg6o";
+const CO_PRENZLBERG    = "5eb987c908eed811feb259d6"
 const FIELDS = {}
 FIELDS[CO_PRENZLBERG] = {
   firstname: "5eb987c908eed811feb259e3",
@@ -90,7 +92,7 @@ function btoa(obj) {
 
 async function getAuth() {
   const auth = new GoogleAuth({
-    keyFile: './auth/fififix-7e2b0667f9c8.json',
+    keyFile: KEYFILE,
     scopes: CLIENTSCOPES,
   });
   return await auth.getClient();
@@ -261,8 +263,10 @@ class Fetcher {
   }
 }
 
-function continueTrying(tasks) {
-  return tasks.length > 0;
+function continueTrying(tasks, startTime) {
+  // keep trying for 15 minutes, or when done
+  const endTime = new Date();
+  return tasks.length > 0 && (endTime - startTime) < (15 * 60 * 1000);
 }
 
 function nextThreeDays() {
@@ -303,11 +307,13 @@ async function placeAthletes(fetcher, event, task) {
   const failed  = [];
   for (const athlete of task.athletes) {
     const session = fetcher.newSession();
-    const outcome = await retryThen(1, async function() {
+    const outcome = await retryThen(10, async function() {
       const reserve = (await fetcher.fetch(RESERVEQUERY, { region: "EUROPE", eventId: event.id }, session)).data;
       const secret = reserve.reserveOnlineCourse.secret;
       await fetcher.placeAthlete(athlete, event.id, secret, session);
-      return `https://www.timify.com/de-de/cancel-booking/?eventId=${event.id}&secret=${secret}&accountId=${fetcher.company}&region=EUROPE`
+      const url = `https://www.timify.com/de-de/cancel-booking/?eventId=${event.id}&secret=${secret}&accountId=${fetcher.company}&region=EUROPE`;
+      console.log(`Placed ${athlete.firstname} ${athlete.lastname}: ${url}`)
+      return url;
     });
     if (outcome.success) {
       success.push({ ...athlete, reservation: outcome.result });
@@ -360,12 +366,40 @@ async function startPolling(fetcher, tasks) {
   }
 }
 
-(async () => {
-  const tasks   = await pullTasklist("15RH3oCfM05l86JMdiUqD_i8d_9vMB2ZXAPLOisDYg6o")
-  const fetcher = new Fetcher(CO_PRENZLBERG);
-  await fetcher.setup();
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  while (continueTrying(tasks)) {
+async function sleepUntil(hours, minutes) {
+  const now  = new Date();
+  const then = new Date();
+  then.setHours(hours);
+  then.setMinutes(minutes);
+
+  if (then - now < 0) {
+    then.setDate(then.getDate() + 1);
+  }
+  const duration = then - now;
+
+  console.log(`Sleeping for ${duration/1000}s`)
+  await sleep(duration);
+}
+
+async function runPlacementAttempt(sheetId, companyId) {
+  await sleepUntil(18, 20);
+  const tasks   = await pullTasklist(sheetId)
+  const fetcher = new Fetcher(companyId);
+  await fetcher.setup();
+  console.log("Completed Setup")
+
+  await sleepUntil(18, 21);
+  console.log("Starting placement")
+  const startTime = new Date();
+  while (continueTrying(tasks, startTime)) {
     await startPolling(fetcher, tasks);
   }
+}
+
+(async () => {
+  await runPlacementAttempt(TASKS_PRENZLBERG, CO_PRENZLBERG)
 })();
