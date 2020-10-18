@@ -296,7 +296,7 @@ async function retryThen(times, op) {
   while (times > 0) {
     try {
       const result = await op();
-      return { success: true, result }
+      return { success: true, result, fails }
     } catch (error) {
       times--;
       fails.push(error)
@@ -350,7 +350,7 @@ async function placeAthletes(fetcher, event, task) {
   const pusher  = new push(PUSHAUTH.auth)
   const goods   = success.map(a => `${a.firstname} ${a.lastname}`).join(",")
   const bads    = failed.map(a => `${a.firstname} ${a.lastname}`).join(",")
-  const message = `${task.sheetName}: Gebucht wurden ${goods}, Fehler bei ${bads}`
+  const message = `Hulk hat ${task.sheetName} gebucht für ${goods}, Fehler bei ${bads}`
   console.log(message)
   pusher.send({ d: PUSHAUTH.group, message })
 }
