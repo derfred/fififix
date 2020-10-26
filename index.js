@@ -14,6 +14,8 @@ const KEYFILE      = './auth/fififix-5d6e131f9ee8.json';
 const PUSHAUTH     = JSON.parse(fs.readFileSync("./auth/push.json"));
 const CLIENTSCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
+const TASKS_GMARKT     = "1M4j_oxDNZA-nQGu_DPgVc_chnXhOWtr5PoDu86EOa44";
+const CO_GMARKT        = "5ec79b2dea42101200adc7c1"
 const TASKS_PRENZLBERG = "15RH3oCfM05l86JMdiUqD_i8d_9vMB2ZXAPLOisDYg6o";
 const CO_PRENZLBERG    = "5eb987c908eed811feb259d6"
 const FIELDS = {}
@@ -22,6 +24,13 @@ FIELDS[CO_PRENZLBERG] = {
   lastname:  "5eb987c908eed811feb259e1",
   email:     "5eb987c908eed811feb259eb",
   phone:     "5eb987c908eed811feb259e4"
+}
+
+FIELDS[CO_GMARKT] = {
+  firstname: "5ec79b2dea42101200adc7d0",
+  lastname:  "5ec79b2dea42101200adc7ce",
+  email:     "5ec79b2dea42101200adc7d1",
+  phone:     "5ec79b2dea42101200adc7d4"
 }
 
 const COURSEQUERY = {
@@ -295,7 +304,7 @@ async function retryThen(times, op) {
   const fails = [];
   while (times > 0) {
     try {
-      const result = await op();
+      const result = await op(fails);
       return { success: true, result, fails }
     } catch (error) {
       times--;
@@ -305,17 +314,32 @@ async function retryThen(times, op) {
   return { success: false, fails }
 }
 
+async function publishOutcome(taskName, success, failed) {
+  const pusher  = new push(PUSHAUTH.auth)
+  const goods   = success.map(a => `${a.firstname} ${a.lastname}`).join(",")
+  const goodMsg = success.length > 0 ? ` für ${goods}` : ""
+  const bads    = failed.map(a => `${a.firstname} ${a.lastname}`).join(",")
+  const badsMsg = failed.length > 0 ? `, Fehler bei ${bads}` : ""
+  const message = `Hulk hat ${taskName} gebucht${goodMsg}${badsMsg}`
+  console.log(message)
+  pusher.send({ d: PUSHAUTH.group, message })
+}
+
 async function placeAthletes(fetcher, event, task) {
   const success = [];
   const failed  = [];
   for (const athlete of task.athletes) {
     const session = fetcher.newSession();
-    const outcome = await retryThen(10, async function() {
-      const reserve = (await fetcher.fetch(RESERVEQUERY, { region: "EUROPE", eventId: event.id }, session)).data;
-      const secret = reserve.reserveOnlineCourse.secret;
+    const outcome = await retryThen(10, async function(prevFails) {
+      const reserve = (await fetcher.fetch(RESERVEQUERY, { region: "EUROPE", eventId: event.id }, session));
+      if (reserve.errors) {
+        throw new Error(`API Error: ${reserve.errors[0].message}`)
+      }
+      const secret = reserve.data.reserveOnlineCourse.secret;
       await fetcher.placeAthlete(athlete, event.id, secret, session);
-      const url = `https://www.timify.com/de-de/cancel-booking/?eventId=${event.id}&secret=${secret}&accountId=${fetcher.company}&region=EUROPE`;
-      console.log(`Placed ${athlete.firstname} ${athlete.lastname}: ${url}`)
+      const url     = `https://www.timify.com/de-de/cancel-booking/?eventId=${event.id}&secret=${secret}&accountId=${fetcher.company}&region=EUROPE`;
+      const failMsg = prevFails.length > 0 ? `${prevFails}` : "";
+      console.log(`Placed ${athlete.firstname} ${athlete.lastname}: ${url}${failMsg}`)
       return url;
     });
     if (outcome.success) {
@@ -325,7 +349,6 @@ async function placeAthletes(fetcher, event, task) {
     }
   }
 
-  console.log(`${task.sheetName} success`, success)
   console.log(`${task.sheetName} failed`, failed)
 
   const auth     = await getAuth();
@@ -347,12 +370,7 @@ async function placeAthletes(fetcher, event, task) {
   for (const athlete of failed) {
     await tryWrite(athlete, `Fehler ${athlete.fails}`)
   }
-  const pusher  = new push(PUSHAUTH.auth)
-  const goods   = success.map(a => `${a.firstname} ${a.lastname}`).join(",")
-  const bads    = failed.map(a => `${a.firstname} ${a.lastname}`).join(",")
-  const message = `Hulk hat ${task.sheetName} gebucht für ${goods}, Fehler bei ${bads}`
-  console.log(message)
-  pusher.send({ d: PUSHAUTH.group, message })
+  await publishOutcome(task.sheetName, success, failed);
 }
 
 async function startPolling(fetcher, tasks) {
@@ -367,7 +385,7 @@ async function startPolling(fetcher, tasks) {
       const event  = events.find(e => courseAndEventMatch(e, task))
 
       if (event) {
-        console.log("placing", task.sheetName)
+        console.log(`placing ${task.sheetName} (${event.participantsCount} / ${event.maxParticipants})`)
         tasks.splice(taskIndex, 1);
         placeAthletes(fetcher, event, task);
       }
@@ -384,6 +402,7 @@ async function sleepUntil(hours, minutes) {
   const then = new Date();
   then.setHours(hours);
   then.setMinutes(minutes);
+  then.setSeconds(0);
 
   if (then - now < 0) {
     then.setDate(then.getDate() + 1);
@@ -399,7 +418,8 @@ async function runPlacementAttempt(sheetId, companyId) {
   const tasks   = await pullTasklist(sheetId)
   const fetcher = new Fetcher(companyId);
   await fetcher.setup();
-  console.log("Completed Setup")
+  const msg = tasks.map(t => `${t.sheetName} (${t.athletes.length})`).join(", ")
+  console.log(`Completed Setup ${msg}`)
 
   await sleepUntil(7, 59);
   console.log("Starting placement")
