@@ -165,7 +165,7 @@ async function pullTasklist(spreadsheetId) {
     const parts = sheet.properties.title.split(" ");
     const date  = getTaskDate(sheet.properties.title);
 
-    if (date < cutoff) {
+    if (date > new Date() && date < cutoff) {
       const task  = {
         sheetId:   spreadsheetId,
         sheetName: sheet.properties.title,
